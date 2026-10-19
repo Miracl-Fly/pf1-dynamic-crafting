@@ -1,0 +1,43 @@
+{
+  "id": "pf1-dynamic-crafting",
+  "title": "PF1 Dynamic Crafting",
+  "description": "<p>基于 PF1 动态造物规则的互动造物界面</p>",
+  "version": "1.0.0",
+  "compatibility": {
+    "minimum": "13",
+    "verified": "13"
+  },
+  "esmodules": [
+    "scripts/main.js"
+  ],
+  "styles": [
+    {
+      "src": "styles/crafting-app.css"
+    }
+  ],
+  "relationships": {
+    "systems": [
+      {
+        "id": "pf1",
+        "type": "system",
+        "compatibility": {
+          "minimum": "11"
+        }
+      }
+    ],
+    "requires": [
+      {
+        "id": "pf-content",
+        "type": "module",
+        "compatibility": {}
+      }
+    ]
+  },
+  "authors": [
+    {
+      "name": "Miracl_Fly",
+      "flags": {}
+    }
+  ],
+  "flags": {}
+}
