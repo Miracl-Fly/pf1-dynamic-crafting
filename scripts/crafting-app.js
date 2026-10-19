@@ -277,41 +277,117 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
     }, 100);
   }
 
-  _refreshBaseItemOptions() {
+  _refreshAbilityOptions() {
     const root = this.element;
     if (!root) return;
     const typeSelect = root.querySelector("#item-type");
     const baseSelect = root.querySelector("#base-item");
-    if (!typeSelect || !baseSelect) return;
+    const upgradeSelect = root.querySelector("#upgrade-item");
+    const abilitySelect = root.querySelector("#special-ability");
+    const enhGroup = root.querySelector("#enhancement-group");
+    if (!typeSelect || !baseSelect || !abilitySelect) return;
 
-    const type = typeSelect.value;
-    baseSelect.innerHTML = "";
+    const itemType = typeSelect.value;
+    if (itemType === "wondrous") return;
 
-    let list = [];
-    if (["simple", "martial", "exotic"].includes(type)) {
-      list = CraftingApp.weaponCache.filter(w => w.wType === type);
-    } else if (["light", "medium", "heavy"].includes(type)) {
-      list = CraftingApp.armorCache.filter(a => a.aType === type);
-    } else if (type === "shield") {
-      list = CraftingApp.shieldCache;
+    const isUpgrading = root.querySelector("#is-upgrading")?.checked;
+    
+    let selectedOption = null;
+    let subtype = "melee", aType = "light", isMetal = true;
+    let isThrown = false, isFirearm = false, isSlashingPiercing = false;
+
+    if (isUpgrading && upgradeSelect) {
+      selectedOption = upgradeSelect.selectedOptions[0];
+      if (!selectedOption || !selectedOption.value) {
+        abilitySelect.innerHTML = `<option value="0" data-name="" data-cl="0" data-bonus="0" data-price="0" data-desc="">无</option>`;
+        return;
+      }
+      subtype = selectedOption?.dataset.subtype || "melee";
+      
+      // 修复：如果在强化，根据物品类型判断
+      if (itemType === "shield") aType = "shield";
+      else if (["light", "medium", "heavy"].includes(itemType)) aType = itemType;
+      
+      if (selectedOption.dataset.type === "equipment" && (selectedOption.dataset.subtype === "light" || selectedOption.dataset.subtype === "heavy" || selectedOption.dataset.subtype === "medium" || selectedOption.dataset.subtype === "shield")) {
+        enhGroup.style.display = "";
+      } else {
+        enhGroup.style.display = "";
+      }
+    } else {
+      selectedOption = baseSelect.selectedOptions[0];
+      if (!selectedOption || !selectedOption.value) {
+        abilitySelect.innerHTML = `<option value="0" data-name="" data-cl="0" data-bonus="0" data-price="0" data-desc="">无</option>`;
+        return;
+      }
+      subtype = selectedOption?.dataset.subtype || (itemType.includes("simple") ? "melee" : itemType);
+      aType = selectedOption?.dataset.atype || "light";
+      isMetal = selectedOption?.dataset.ismetal !== "false";
+
+      try {
+        const props = JSON.parse(selectedOption?.dataset.props || "{}");
+        isThrown = props.isThrown || false;
+        isFirearm = props.isFirearm || false;
+        isSlashingPiercing = props.isSlashingPiercing || false;
+      } catch (e) {}
     }
 
-    if (!list.length) {
-      baseSelect.innerHTML = `<option value="">- 无 -</option>`;
-      return;
+    abilitySelect.innerHTML = `<option value="0" data-name="" data-cl="0" data-bonus="0" data-price="0" data-desc="">无</option>`;
+
+    let abilities = [];
+    const isWeaponType = ["simple", "martial", "exotic"].includes(itemType);
+
+    if (isWeaponType) {
+      abilities = WEAPON_ABILITIES.filter(ab => {
+        if (ab.req === "slashing_piercing" && !isSlashingPiercing) return false;
+        if (ab.req === "thrown" && !isThrown) return false;
+        if (ab.req === "firearm" && !isFirearm) return false;
+        if (ab.req === "not_firearm" && isFirearm) return false;
+        
+        if (ab.type === "melee" && subtype !== "melee") return false;
+        if (ab.type === "ranged" && subtype !== "ranged") return false;
+        
+        return true;
+      });
+    } else {
+      // 修复：盾牌和护甲合并判断逻辑
+      const slot = itemType === "shield" ? "shield" : "armor";
+      abilities = ARMOR_ABILITIES.filter(ab => {
+        // 如果是盾牌，允许 "both", "shield", "armor" 类型的附魔
+        if (itemType === "shield") {
+          if (ab.type !== "both" && ab.type !== "shield" && ab.type !== "armor") return false;
+        } else {
+          if (ab.type !== "both" && ab.type !== "armor") return false;
+        }
+        
+        if (ab.req === "light_medium" && aType === "heavy") return false;
+        if (ab.req === "light" && aType !== "light" && aType !== "shield") return false;
+        if (ab.req === "nonmetal" && isMetal) return false;
+        if (ab.req === "leather" && isMetal) return false;
+        if (ab.req === "organic" && isMetal) return false;
+        
+        return true;
+      });
     }
 
-    list.forEach(item => {
+    abilities.forEach(ab => {
       const opt = document.createElement("option");
-      opt.value = item.id;
-      opt.dataset.price = item.price;
-      opt.dataset.name = item.name;
-      opt.dataset.subtype = item.subtype;
-      opt.dataset.atype = item.aType || "";
-      opt.dataset.ismetal = item.isMetal !== undefined ? item.isMetal : true;
-      if (item.props) opt.dataset.props = JSON.stringify(item.props);
-      opt.textContent = `${item.name} (${item.price} gp)`;
-      baseSelect.appendChild(opt);
+      opt.value = ab.name;
+      opt.dataset.name = ab.name;
+      opt.dataset.cl = ab.cl;
+      opt.dataset.bonus = ab.bonus;
+      opt.dataset.price = ab.price || 0;
+      opt.dataset.desc = localizeAbilityDesc(ab);
+      
+      let displayText = `${localizeAbilityName(ab)} (`;
+      if (ab.bonus > 0) displayText += `+${ab.bonus}`;
+      if (ab.price > 0) {
+         if (ab.bonus > 0) displayText += `, `;
+         displayText += `+${ab.price}gp`;
+      }
+      displayText += `, CL ${ab.cl})`;
+      
+      opt.textContent = displayText;
+      abilitySelect.appendChild(opt);
     });
   }
 
@@ -346,13 +422,26 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const root = this.element;
     if (!root) return;
     const type = root.querySelector("#item-type")?.value;
+    const isUpgrading = root.querySelector("#is-upgrading")?.checked;
     const equipFields = root.querySelector("#equipment-fields");
     const wondrousFields = root.querySelector("#wondrous-fields");
-    if (!equipFields || !wondrousFields) return;
     
+    // 新增：控制奇物搜索与物品下拉的显示
+    const baseItemGroup = root.querySelector("#base-item-group");
+    const upgradeItemGroup = root.querySelector("#upgrade-item-group");
+
     if (type === "wondrous") {
-      equipFields.style.display = "none";
-      wondrousFields.style.display = "";
+      if (isUpgrading) {
+        // 强化奇物：必须从背包里选
+        equipFields.style.display = ""; 
+        wondrousFields.style.display = "none";
+        if(baseItemGroup) baseItemGroup.style.display = "none";
+        if(upgradeItemGroup) upgradeItemGroup.style.display = "";
+      } else {
+        // 新造奇物：搜索
+        equipFields.style.display = "none";
+        wondrousFields.style.display = "";
+      }
     } else {
       equipFields.style.display = "";
       wondrousFields.style.display = "none";
@@ -587,10 +676,9 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
       if (targetId === "is-upgrading") {
         const isUpgrading = event.target.checked;
-        root.querySelector("#base-item-group").style.display = isUpgrading ? "none" : "";
-        root.querySelector("#upgrade-item-group").style.display = isUpgrading ? "" : "none";
         root.querySelector("#old-price-container").style.display = isUpgrading ? "block" : "none";
         root.querySelector("#diff-price-container").style.display = isUpgrading ? "block" : "none";
+        this._toggleTypeFields(); // 加这一句
         this._refreshAbilityOptions();
       }
 
@@ -643,9 +731,11 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
       if (!this.craftingState.isCrafting) {
         const itemType = root.querySelector("#item-type")?.value;
-        if (itemType === "wondrous") {
-          // 由搜索处理
+        const isUpgradingNow = root.querySelector("#is-upgrading")?.checked;
+        if (itemType === "wondrous" && !isUpgradingNow) {
+          // 新造奇物由搜索处理
         } else {
+           // ... 原有的计算逻辑
           const isUpgrading = root.querySelector("#is-upgrading")?.checked;
           let basePrice = 0;
           let oldPrice = 0;
