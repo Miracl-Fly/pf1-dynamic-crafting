@@ -183,22 +183,25 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
               subtype = "shield";
            }
 
-           // 优先从 flags 提取附魔数据，兼容旧版物品时使用放宽的正则
            let abName = "", abBonus = 0, abPrice = 0;
            const flags = item.flags?.["pf1-dynamic-crafting"];
            if (flags && flags.abilityName) {
                abName = flags.abilityName;
                abBonus = flags.abilityBonus || 0;
                abPrice = flags.abilityPrice || 0;
-           } else {
-               const desc = item.system.description?.value || "";
-               const matchName = desc.match(/特殊附魔[：:]\s*(?:<[^>]+>)*([^<(\n]+)/i);
-               if (matchName && matchName[1]) abName = matchName[1].trim();
-               const matchBonus = desc.match(/等效\s*\+(\d+)/i);
-               if (matchBonus && matchBonus[1]) abBonus = parseInt(matchBonus[1]);
-               const matchPrice = desc.match(/\+(\d+)\s*gp/i);
-               if (matchPrice && matchPrice[1]) abPrice = parseInt(matchPrice[1]);
            }
+           // 不再从物品描述里正则提取附魔，以避免误伤中文描述中的 "+1000gp" 等文本！
+
+           // 准确读取物品的实际增强加值
+           let actualEnh = 0;
+           if (item.type === "weapon") {
+               actualEnh = item.system.enh || 0;
+           } else if (item.type === "equipment" || item.type === "shield") {
+               actualEnh = item.system.armor?.enh || item.system.enh || 0;
+           }
+
+           // 准确判断是否已经是精制品
+           const isOldMasterwork = item.system.masterwork === true || item.system.armor?.masterwork === true || actualEnh > 0;
 
            CraftingApp.playerItemsCache.push({
              id: item.id,
@@ -207,13 +210,14 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
              price: item.system.price || 0,
              type: item.type,
              subtype: subtype,
-             enh: item.system.enh || item.system.armor?.enh || 0,
+             enh: actualEnh,
              cl: item.system.cl || 0,
              desc: item.system.description?.value || "",
              slot: item.system.slot || "",
              abName: abName,
              abBonus: abBonus,
-             abPrice: abPrice
+             abPrice: abPrice,
+             isMasterwork: isOldMasterwork
            });
         }
       }
@@ -244,7 +248,7 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
     setTimeout(() => { 
       this._refreshBaseItemOptions();
       this._refreshUpgradeOptions(context.playerItems);
-      this._toggleTypeFields();
+      this._toggleTypeFields(); 
       this._refreshAllValues(); 
       this._updateDynamicDC(); 
       if (!this.craftingState.isCrafting) this._refreshAbilityOptions();
@@ -264,130 +268,54 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
           
           resultsDiv.style.display = "none";
           const selectedDiv = this.element.querySelector("#specific-selected");
-          selectedDiv.style.display = "block";
-          this.element.querySelector("#selected-item-name").textContent = name;
-          this.element.querySelector("#selected-item-price").textContent = price;
-          this.element.querySelector("#selected-item-cl").textContent = cl;
+          if (selectedDiv) {
+            selectedDiv.style.display = "block";
+            this.element.querySelector("#selected-item-name").textContent = name;
+            this.element.querySelector("#selected-item-price").textContent = price;
+            this.element.querySelector("#selected-item-cl").textContent = cl;
+          }
 
-          this.element.querySelector("#item-cl").textContent = cl;
-          this.element.querySelector("#market-price").textContent = price.toLocaleString();
-          this.element.querySelector("#total-bonus-preview").textContent = "—";
+          this._updatePricePreview();
         });
       }
     }, 100);
   }
 
-  _refreshAbilityOptions() {
+  _refreshBaseItemOptions() {
     const root = this.element;
     if (!root) return;
     const typeSelect = root.querySelector("#item-type");
     const baseSelect = root.querySelector("#base-item");
-    const upgradeSelect = root.querySelector("#upgrade-item");
-    const abilitySelect = root.querySelector("#special-ability");
-    const enhGroup = root.querySelector("#enhancement-group");
-    if (!typeSelect || !baseSelect || !abilitySelect) return;
+    if (!typeSelect || !baseSelect) return;
 
-    const itemType = typeSelect.value;
-    if (itemType === "wondrous") return;
+    const type = typeSelect.value;
+    baseSelect.innerHTML = "";
 
-    const isUpgrading = root.querySelector("#is-upgrading")?.checked;
-    
-    let selectedOption = null;
-    let subtype = "melee", aType = "light", isMetal = true;
-    let isThrown = false, isFirearm = false, isSlashingPiercing = false;
-
-    if (isUpgrading && upgradeSelect) {
-      selectedOption = upgradeSelect.selectedOptions[0];
-      if (!selectedOption || !selectedOption.value) {
-        abilitySelect.innerHTML = `<option value="0" data-name="" data-cl="0" data-bonus="0" data-price="0" data-desc="">无</option>`;
-        return;
-      }
-      subtype = selectedOption?.dataset.subtype || "melee";
-      
-      // 修复：如果在强化，根据物品类型判断
-      if (itemType === "shield") aType = "shield";
-      else if (["light", "medium", "heavy"].includes(itemType)) aType = itemType;
-      
-      if (selectedOption.dataset.type === "equipment" && (selectedOption.dataset.subtype === "light" || selectedOption.dataset.subtype === "heavy" || selectedOption.dataset.subtype === "medium" || selectedOption.dataset.subtype === "shield")) {
-        enhGroup.style.display = "";
-      } else {
-        enhGroup.style.display = "";
-      }
-    } else {
-      selectedOption = baseSelect.selectedOptions[0];
-      if (!selectedOption || !selectedOption.value) {
-        abilitySelect.innerHTML = `<option value="0" data-name="" data-cl="0" data-bonus="0" data-price="0" data-desc="">无</option>`;
-        return;
-      }
-      subtype = selectedOption?.dataset.subtype || (itemType.includes("simple") ? "melee" : itemType);
-      aType = selectedOption?.dataset.atype || "light";
-      isMetal = selectedOption?.dataset.ismetal !== "false";
-
-      try {
-        const props = JSON.parse(selectedOption?.dataset.props || "{}");
-        isThrown = props.isThrown || false;
-        isFirearm = props.isFirearm || false;
-        isSlashingPiercing = props.isSlashingPiercing || false;
-      } catch (e) {}
+    let list = [];
+    if (["simple", "martial", "exotic"].includes(type)) {
+      list = CraftingApp.weaponCache.filter(w => w.wType === type);
+    } else if (["light", "medium", "heavy"].includes(type)) {
+      list = CraftingApp.armorCache.filter(a => a.aType === type);
+    } else if (type === "shield") {
+      list = CraftingApp.shieldCache;
     }
 
-    abilitySelect.innerHTML = `<option value="0" data-name="" data-cl="0" data-bonus="0" data-price="0" data-desc="">无</option>`;
-
-    let abilities = [];
-    const isWeaponType = ["simple", "martial", "exotic"].includes(itemType);
-
-    if (isWeaponType) {
-      abilities = WEAPON_ABILITIES.filter(ab => {
-        if (ab.req === "slashing_piercing" && !isSlashingPiercing) return false;
-        if (ab.req === "thrown" && !isThrown) return false;
-        if (ab.req === "firearm" && !isFirearm) return false;
-        if (ab.req === "not_firearm" && isFirearm) return false;
-        
-        if (ab.type === "melee" && subtype !== "melee") return false;
-        if (ab.type === "ranged" && subtype !== "ranged") return false;
-        
-        return true;
-      });
-    } else {
-      // 修复：盾牌和护甲合并判断逻辑
-      const slot = itemType === "shield" ? "shield" : "armor";
-      abilities = ARMOR_ABILITIES.filter(ab => {
-        // 如果是盾牌，允许 "both", "shield", "armor" 类型的附魔
-        if (itemType === "shield") {
-          if (ab.type !== "both" && ab.type !== "shield" && ab.type !== "armor") return false;
-        } else {
-          if (ab.type !== "both" && ab.type !== "armor") return false;
-        }
-        
-        if (ab.req === "light_medium" && aType === "heavy") return false;
-        if (ab.req === "light" && aType !== "light" && aType !== "shield") return false;
-        if (ab.req === "nonmetal" && isMetal) return false;
-        if (ab.req === "leather" && isMetal) return false;
-        if (ab.req === "organic" && isMetal) return false;
-        
-        return true;
-      });
+    if (!list.length) {
+      baseSelect.innerHTML = `<option value="">- 无 -</option>`;
+      return;
     }
 
-    abilities.forEach(ab => {
+    list.forEach(item => {
       const opt = document.createElement("option");
-      opt.value = ab.name;
-      opt.dataset.name = ab.name;
-      opt.dataset.cl = ab.cl;
-      opt.dataset.bonus = ab.bonus;
-      opt.dataset.price = ab.price || 0;
-      opt.dataset.desc = localizeAbilityDesc(ab);
-      
-      let displayText = `${localizeAbilityName(ab)} (`;
-      if (ab.bonus > 0) displayText += `+${ab.bonus}`;
-      if (ab.price > 0) {
-         if (ab.bonus > 0) displayText += `, `;
-         displayText += `+${ab.price}gp`;
-      }
-      displayText += `, CL ${ab.cl})`;
-      
-      opt.textContent = displayText;
-      abilitySelect.appendChild(opt);
+      opt.value = item.id;
+      opt.dataset.price = item.price;
+      opt.dataset.name = item.name;
+      opt.dataset.subtype = item.subtype;
+      opt.dataset.atype = item.aType || "";
+      opt.dataset.ismetal = item.isMetal !== undefined ? item.isMetal : true;
+      if (item.props) opt.dataset.props = JSON.stringify(item.props);
+      opt.textContent = `${item.name} (${item.price} gp)`;
+      baseSelect.appendChild(opt);
     });
   }
 
@@ -413,6 +341,7 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
       opt.dataset.oldabname = item.abName || "";
       opt.dataset.oldabbonus = item.abBonus || 0;
       opt.dataset.oldabprice = item.abPrice || 0;
+      opt.dataset.ismasterwork = item.isMasterwork ? "true" : "false";
       opt.textContent = `${item.name} (总价: ${item.price} gp)`;
       upgradeSelect.appendChild(opt);
     });
@@ -423,28 +352,35 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
     if (!root) return;
     const type = root.querySelector("#item-type")?.value;
     const isUpgrading = root.querySelector("#is-upgrading")?.checked;
+    
     const equipFields = root.querySelector("#equipment-fields");
     const wondrousFields = root.querySelector("#wondrous-fields");
-    
-    // 新增：控制奇物搜索与物品下拉的显示
     const baseItemGroup = root.querySelector("#base-item-group");
     const upgradeItemGroup = root.querySelector("#upgrade-item-group");
+    const enhancementGroup = root.querySelector("#enhancement-group");
+    const abilityGroup = root.querySelector("#ability-group");
+
+    if (!equipFields) return;
 
     if (type === "wondrous") {
+      wondrousFields.style.display = "";
+      
       if (isUpgrading) {
-        // 强化奇物：必须从背包里选
         equipFields.style.display = ""; 
-        wondrousFields.style.display = "none";
-        if(baseItemGroup) baseItemGroup.style.display = "none";
-        if(upgradeItemGroup) upgradeItemGroup.style.display = "";
+        baseItemGroup.style.display = "none";
+        upgradeItemGroup.style.display = "";
+        if(enhancementGroup) enhancementGroup.style.display = "none";
+        if(abilityGroup) abilityGroup.style.display = "none";
       } else {
-        // 新造奇物：搜索
         equipFields.style.display = "none";
-        wondrousFields.style.display = "";
       }
     } else {
       equipFields.style.display = "";
       wondrousFields.style.display = "none";
+      baseItemGroup.style.display = isUpgrading ? "none" : "";
+      upgradeItemGroup.style.display = isUpgrading ? "" : "none";
+      if(enhancementGroup) enhancementGroup.style.display = "";
+      if(abilityGroup) abilityGroup.style.display = "";
     }
   }
 
@@ -455,7 +391,6 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const baseSelect = root.querySelector("#base-item");
     const upgradeSelect = root.querySelector("#upgrade-item");
     const abilitySelect = root.querySelector("#special-ability");
-    const enhGroup = root.querySelector("#enhancement-group");
     if (!typeSelect || !baseSelect || !abilitySelect) return;
 
     const itemType = typeSelect.value;
@@ -475,11 +410,9 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
       }
       subtype = selectedOption?.dataset.subtype || "melee";
       
-      if (selectedOption.dataset.type === "equipment" && (selectedOption.dataset.subtype === "light" || selectedOption.dataset.subtype === "heavy" || selectedOption.dataset.subtype === "medium" || selectedOption.dataset.subtype === "shield")) {
-        enhGroup.style.display = "";
-      } else {
-        enhGroup.style.display = "";
-      }
+      if (itemType === "shield") aType = "shield";
+      else if (["light", "medium", "heavy"].includes(itemType)) aType = itemType;
+      
     } else {
       selectedOption = baseSelect.selectedOptions[0];
       if (!selectedOption || !selectedOption.value) {
@@ -516,12 +449,15 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
         return true;
       });
     } else {
-      const slot = itemType === "shield" ? "shield" : "armor";
       abilities = ARMOR_ABILITIES.filter(ab => {
-        if (ab.type !== "both" && ab.type !== slot) return false;
+        if (itemType === "shield") {
+          if (ab.type !== "both" && ab.type !== "shield" && ab.type !== "armor") return false;
+        } else {
+          if (ab.type !== "both" && ab.type !== "armor") return false;
+        }
         
         if (ab.req === "light_medium" && aType === "heavy") return false;
-        if (ab.req === "light" && aType !== "light") return false;
+        if (ab.req === "light" && aType !== "light" && aType !== "shield") return false;
         if (ab.req === "nonmetal" && isMetal) return false;
         if (ab.req === "leather" && isMetal) return false;
         if (ab.req === "organic" && isMetal) return false;
@@ -668,6 +604,182 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
     });
   }
 
+  _updatePricePreview() {
+    const root = this.element;
+    if (!root) return;
+
+    const itemType = root.querySelector("#item-type")?.value;
+    const isUpgrading = root.querySelector("#is-upgrading")?.checked;
+    
+    const upgradeSel = root.querySelector("#upgrade-item");
+    const hasUpgradeItem = upgradeSel && upgradeSel.value;
+    const hasSearchedWondrous = this.craftingState.specificItem !== null;
+
+    const oldContainer = root.querySelector("#old-price-container");
+    const diffContainer = root.querySelector("#diff-price-container");
+    const oldPreview = root.querySelector("#old-price-preview");
+    const diffPreview = root.querySelector("#diff-price-preview");
+
+    if (!isUpgrading) {
+      if (oldContainer) oldContainer.style.display = "none";
+      if (diffContainer) diffContainer.style.display = "none";
+    } else {
+      if (itemType === "wondrous") {
+        if (hasUpgradeItem && hasSearchedWondrous) {
+          const opt = upgradeSel.selectedOptions[0];
+          const oldPrice = parseInt(opt.dataset.price) || 0;
+          const newPrice = this.craftingState.specificItem.price;
+          const diff = newPrice - oldPrice;
+
+          if (root.querySelector("#item-cl")) root.querySelector("#item-cl").textContent = this.craftingState.specificItem.cl;
+          if (root.querySelector("#market-price")) root.querySelector("#market-price").textContent = newPrice.toLocaleString();
+          if (oldPreview) oldPreview.textContent = oldPrice.toLocaleString();
+          if (diffPreview) {
+            diffPreview.textContent = diff.toLocaleString();
+            diffPreview.style.color = diff <= 0 ? "red" : "green";
+          }
+          if (root.querySelector("#total-bonus-preview")) root.querySelector("#total-bonus-preview").textContent = "—";
+
+          if (oldContainer) oldContainer.style.display = "block";
+          if (diffContainer) diffContainer.style.display = "block";
+        } else if (hasUpgradeItem) {
+          const opt = upgradeSel.selectedOptions[0];
+          const oldPrice = parseInt(opt.dataset.price) || 0;
+          if (root.querySelector("#item-cl")) root.querySelector("#item-cl").textContent = opt.dataset.cl || 0;
+          if (root.querySelector("#market-price")) root.querySelector("#market-price").textContent = oldPrice.toLocaleString();
+          if (oldPreview) oldPreview.textContent = oldPrice.toLocaleString();
+          if (diffPreview) {
+            diffPreview.textContent = "0";
+            diffPreview.style.color = "black";
+          }
+          if (root.querySelector("#total-bonus-preview")) root.querySelector("#total-bonus-preview").textContent = "—";
+
+          if (oldContainer) oldContainer.style.display = "block";
+          if (diffContainer) diffContainer.style.display = "block";
+        } else {
+          if (root.querySelector("#item-cl")) root.querySelector("#item-cl").textContent = 0;
+          if (root.querySelector("#market-price")) root.querySelector("#market-price").textContent = 0;
+          if (oldPreview) oldPreview.textContent = "0";
+          if (diffPreview) diffPreview.textContent = "0";
+          if (root.querySelector("#total-bonus-preview")) root.querySelector("#total-bonus-preview").textContent = "—";
+          
+          if (oldContainer) oldContainer.style.display = "none";
+          if (diffContainer) diffContainer.style.display = "none";
+        }
+        return; 
+      }
+
+      if (hasUpgradeItem) {
+        const opt = upgradeSel.selectedOptions[0];
+        const oldPrice = parseInt(opt.dataset.price) || 0;
+        const oldEnh = parseInt(opt.dataset.enh) || 0; // 现在读取的是系统真实数据，精制品就是 0
+        const oldAbilityBonus = parseInt(opt.dataset.oldabbonus) || 0;
+        const oldAbilityPrice = parseInt(opt.dataset.oldabprice) || 0;
+        const isOldMasterwork = opt.dataset.ismasterwork === "true";
+
+        const enh = parseInt(root.querySelector("#enhancement")?.value) || 0;
+        const abilitySelect = root.querySelector("#special-ability");
+        const selectedOpt = abilitySelect?.selectedOptions[0];
+        
+        let abilityBonus = parseInt(selectedOpt?.dataset.bonus) || 0;
+        let abilityPrice = parseInt(selectedOpt?.dataset.price) || 0;
+        let abilityCL = parseInt(selectedOpt?.dataset.cl) || 0;
+        let newAbilityName = selectedOpt?.dataset.name || "";
+
+        let finalAbilityBonus = abilityBonus;
+        let finalAbilityPrice = abilityPrice;
+        
+        const oldAbilityName = opt.dataset.oldabname || "";
+        if (oldAbilityName && oldAbilityName !== newAbilityName) {
+           finalAbilityBonus += oldAbilityBonus;
+           finalAbilityPrice += oldAbilityPrice;
+        }
+
+        const totalBonus = enh + finalAbilityBonus;
+        const oldTotalBonus = oldEnh + oldAbilityBonus;
+        const itemCL = Math.max(enh * 3, abilityCL);
+        const isWeaponType = ["simple", "martial", "exotic"].includes(itemType);
+
+        // 计算差价
+        const newMagicPrice = isWeaponType ? (totalBonus * totalBonus * 2000) : (totalBonus * totalBonus * 1000) + finalAbilityPrice;
+        const oldMagicPrice = isWeaponType ? (oldTotalBonus * oldTotalBonus * 2000) : (oldTotalBonus * oldTotalBonus * 1000) + oldAbilityPrice;
+        const magicPriceDiff = newMagicPrice - oldMagicPrice;
+
+        const addMasterworkPrice = isOldMasterwork ? 0 : (isWeaponType ? 300 : 150);
+
+        const newTotalPrice = oldPrice + magicPriceDiff + addMasterworkPrice;
+        const diff = newTotalPrice - oldPrice;
+
+        if (root.querySelector("#item-cl")) root.querySelector("#item-cl").textContent = itemCL;
+        if (root.querySelector("#market-price")) root.querySelector("#market-price").textContent = newTotalPrice.toLocaleString();
+        if (oldPreview) oldPreview.textContent = oldPrice.toLocaleString();
+        if (diffPreview) {
+          diffPreview.textContent = diff.toLocaleString();
+          diffPreview.style.color = diff <= 0 ? "red" : "green";
+        }
+        if (root.querySelector("#total-bonus-preview")) {
+          root.querySelector("#total-bonus-preview").textContent = `+${totalBonus}` + (finalAbilityPrice > 0 ? ` (+${finalAbilityPrice}gp)` : "");
+        }
+
+        if (oldContainer) oldContainer.style.display = "block";
+        if (diffContainer) diffContainer.style.display = "block";
+        return;
+      } else {
+        if (root.querySelector("#item-cl")) root.querySelector("#item-cl").textContent = 0;
+        if (root.querySelector("#market-price")) root.querySelector("#market-price").textContent = 0;
+        if (oldPreview) oldPreview.textContent = "0";
+        if (diffPreview) diffPreview.textContent = "0";
+        if (root.querySelector("#total-bonus-preview")) root.querySelector("#total-bonus-preview").textContent = "+0";
+
+        if (oldContainer) oldContainer.style.display = "none";
+        if (diffContainer) diffContainer.style.display = "none";
+        return;
+      }
+    }
+
+    if (itemType === "wondrous") {
+      if (hasSearchedWondrous) {
+        const price = this.craftingState.specificItem.price;
+        if (root.querySelector("#item-cl")) root.querySelector("#item-cl").textContent = this.craftingState.specificItem.cl;
+        if (root.querySelector("#market-price")) root.querySelector("#market-price").textContent = price.toLocaleString();
+        if (root.querySelector("#total-bonus-preview")) root.querySelector("#total-bonus-preview").textContent = "—";
+      }
+    } else {
+      const baseSelect = root.querySelector("#base-item");
+      const basePrice = parseInt(baseSelect?.selectedOptions[0]?.dataset.price) || 0;
+      
+      const enh = parseInt(root.querySelector("#enhancement")?.value) || 0;
+      const abilitySelect = root.querySelector("#special-ability");
+      const selectedOpt = abilitySelect?.selectedOptions[0];
+      
+      let abilityBonus = parseInt(selectedOpt?.dataset.bonus) || 0;
+      let abilityPrice = parseInt(selectedOpt?.dataset.price) || 0;
+      let abilityCL = parseInt(selectedOpt?.dataset.cl) || 0;
+
+      const totalBonus = enh + abilityBonus;
+      const itemCL = Math.max(enh * 3, abilityCL);
+      
+      let magicPrice, masterworkPrice;
+      const isWeaponType = ["simple", "martial", "exotic"].includes(itemType);
+      
+      if (isWeaponType) {
+        magicPrice = totalBonus * totalBonus * 2000;
+        masterworkPrice = 300; 
+      } else {
+        magicPrice = (totalBonus * totalBonus * 1000) + abilityPrice;
+        masterworkPrice = (basePrice > 0) ? 150 : 0; 
+      }
+      
+      const newTotalPrice = basePrice + masterworkPrice + magicPrice;
+      
+      if (root.querySelector("#item-cl")) root.querySelector("#item-cl").textContent = itemCL;
+      if (root.querySelector("#market-price")) root.querySelector("#market-price").textContent = newTotalPrice.toLocaleString();
+      if (root.querySelector("#total-bonus-preview")) {
+        root.querySelector("#total-bonus-preview").textContent = `+${totalBonus}` + (abilityPrice > 0 ? ` (+${abilityPrice}gp)` : "");
+      }
+    }
+  }
+
   static async _onFormChange(event, form, formData) {
     setTimeout(() => {
       const root = this.element;
@@ -675,42 +787,37 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
       const targetId = event.target.id;
 
       if (targetId === "is-upgrading") {
-        const isUpgrading = event.target.checked;
-        root.querySelector("#old-price-container").style.display = isUpgrading ? "block" : "none";
-        root.querySelector("#diff-price-container").style.display = isUpgrading ? "block" : "none";
-        this._toggleTypeFields(); // 加这一句
+        this._toggleTypeFields(); 
         this._refreshAbilityOptions();
       }
 
       if (targetId === "item-type") {
-        this._toggleTypeFields();
+        this._toggleTypeFields(); 
         this._refreshBaseItemOptions();
         this._refreshAbilityOptions();
       }
       
-      if (targetId === "base-item" || targetId === "upgrade-item") {
-        if (targetId === "upgrade-item") {
-          const opt = event.target.selectedOptions[0];
-          if (opt && opt.value) {
-            const oldEnh = parseInt(opt.dataset.enh) || 0;
-            const oldAbilityName = opt.dataset.oldabname || "";
-            
-            root.querySelector("#enhancement").value = oldEnh;
-            
-            if (oldAbilityName) {
-              this._refreshAbilityOptions(); 
-              const abilitySelect = root.querySelector("#special-ability");
-              for (let i = 0; i < abilitySelect.options.length; i++) {
-                if (abilitySelect.options[i].dataset.name === oldAbilityName) {
-                  abilitySelect.selectedIndex = i;
-                  break;
-                }
+      if (targetId === "upgrade-item") {
+        const opt = event.target.selectedOptions[0];
+        if (opt && opt.value) {
+          const oldEnh = parseInt(opt.dataset.enh) || 0;
+          const oldAbilityName = opt.dataset.oldabname || "";
+          
+          root.querySelector("#enhancement").value = oldEnh;
+          
+          if (oldAbilityName) {
+            this._refreshAbilityOptions(); 
+            const abilitySelect = root.querySelector("#special-ability");
+            for (let i = 0; i < abilitySelect.options.length; i++) {
+              if (abilitySelect.options[i].dataset.name === oldAbilityName) {
+                abilitySelect.selectedIndex = i;
+                break;
               }
             }
           }
-        } else {
-          this._refreshAbilityOptions();
         }
+      } else if (targetId === "base-item") {
+        this._refreshAbilityOptions();
       }
 
       if (targetId === "prestige-select") {
@@ -730,105 +837,7 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
       }
 
       if (!this.craftingState.isCrafting) {
-        const itemType = root.querySelector("#item-type")?.value;
-        const isUpgradingNow = root.querySelector("#is-upgrading")?.checked;
-        if (itemType === "wondrous" && !isUpgradingNow) {
-          // 新造奇物由搜索处理
-        } else {
-           // ... 原有的计算逻辑
-          const isUpgrading = root.querySelector("#is-upgrading")?.checked;
-          let basePrice = 0;
-          let oldPrice = 0;
-
-          if (isUpgrading) {
-            const upgradeSel = root.querySelector("#upgrade-item");
-            const opt = upgradeSel.selectedOptions[0];
-            if (opt && opt.value) {
-              oldPrice = parseInt(opt.dataset.price) || 0;
-              const oldEnh = parseInt(opt.dataset.enh) || 0;
-              const oldAbilityBonus = parseInt(opt.dataset.oldabbonus) || 0;
-              const oldAbilityPrice = parseInt(opt.dataset.oldabprice) || 0;
-
-              // 反推基础物品价格（从原价中剥离旧魔法价格和精制品价格）
-              const isWeaponType = ["simple", "martial", "exotic"].includes(itemType);
-              const oldTotalBonus = oldEnh + oldAbilityBonus;
-              const oldMagicPrice = isWeaponType ? oldTotalBonus * oldTotalBonus * 2000 : (oldTotalBonus * oldTotalBonus * 1000) + oldAbilityPrice;
-              const oldMasterworkPrice = isWeaponType ? 300 : 150;
-              basePrice = Math.max(0, oldPrice - oldMagicPrice - oldMasterworkPrice);
-              
-              root.querySelector("#old-price-preview").textContent = oldPrice.toLocaleString();
-            } else {
-              oldPrice = 0;
-              root.querySelector("#old-price-preview").textContent = "0";
-            }
-          } else {
-            const baseSelect = root.querySelector("#base-item");
-            basePrice = parseInt(baseSelect?.selectedOptions[0]?.dataset.price) || 0;
-          }
-
-          const enh = parseInt(root.querySelector("#enhancement")?.value) || 0;
-          const abilitySelect = root.querySelector("#special-ability");
-          const selectedOpt = abilitySelect?.selectedOptions[0];
-          
-          let abilityBonus = parseInt(selectedOpt?.dataset.bonus) || 0;
-          let abilityPrice = parseInt(selectedOpt?.dataset.price) || 0;
-          let abilityCL = parseInt(selectedOpt?.dataset.cl) || 0;
-          let newAbilityName = selectedOpt?.dataset.name || "";
-
-          let finalAbilityBonus = abilityBonus;
-          let finalAbilityPrice = abilityPrice;
-          
-          // 累加旧附魔
-          if (isUpgrading) {
-            const upgradeSel = root.querySelector("#upgrade-item");
-            const opt = upgradeSel.selectedOptions[0];
-            if (opt && opt.value) {
-              const oldAbilityName = opt.dataset.oldabname || "";
-              const oldAbilityBonus = parseInt(opt.dataset.oldabbonus) || 0;
-              const oldAbilityPrice = parseInt(opt.dataset.oldabprice) || 0;
-              
-              if (oldAbilityName && oldAbilityName !== newAbilityName) {
-                 finalAbilityBonus += oldAbilityBonus;
-                 finalAbilityPrice += oldAbilityPrice;
-              }
-            }
-          }
-
-          const totalBonus = enh + finalAbilityBonus;
-          const itemCL = Math.max(enh * 3, abilityCL);
-          
-          let magicPrice, masterworkPrice;
-          const isWeaponType = ["simple", "martial", "exotic"].includes(itemType);
-          
-          if (isWeaponType) {
-            magicPrice = totalBonus * totalBonus * 2000;
-            masterworkPrice = 300; 
-          } else {
-            magicPrice = (totalBonus * totalBonus * 1000) + finalAbilityPrice;
-            masterworkPrice = 150;
-          }
-          
-          const newTotalPrice = basePrice + masterworkPrice + magicPrice;
-          
-          if (root.querySelector("#item-cl")) root.querySelector("#item-cl").textContent = itemCL;
-          if (root.querySelector("#market-price")) root.querySelector("#market-price").textContent = newTotalPrice.toLocaleString();
-          
-          if (isUpgrading) {
-            const diff = newTotalPrice - oldPrice;
-            if (root.querySelector("#diff-price-preview")) {
-              root.querySelector("#diff-price-preview").textContent = diff.toLocaleString();
-              root.querySelector("#diff-price-preview").style.color = diff <= 0 ? "red" : "green";
-            }
-          }
-          
-          if (root.querySelector("#total-bonus-preview")) {
-            if (totalBonus > 0) {
-              root.querySelector("#total-bonus-preview").textContent = `+${totalBonus}` + (finalAbilityPrice > 0 ? ` (+${finalAbilityPrice}gp)` : "");
-            } else {
-              root.querySelector("#total-bonus-preview").textContent = finalAbilityPrice > 0 ? `+0 (+${finalAbilityPrice}gp)` : "+0";
-            }
-          }
-        }
+        this._updatePricePreview();
       }
       this._refreshAllValues();
       this._updateDynamicDC();
@@ -925,16 +934,42 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
     let specificItem = null;
     let oldPrice = 0;
 
+    const upgradeSel = root.querySelector("#upgrade-item");
+    const hasUpgradeItem = isUpgrading && upgradeSel?.value;
+    const hasSearchedWondrous = this.craftingState.specificItem !== null;
+    const isActualUpgrade = isUpgrading && hasUpgradeItem;
+
     if (isWondrous) {
-      specificItem = this.craftingState.specificItem;
-      if (!specificItem) return ui.notifications.error("请先在上方搜索并选择一个奇物！");
-      itemCL = specificItem.cl;
-      marketPrice = specificItem.price;
-      itemName = specificItem.name;
-      baseItemId = specificItem.id;
-      enh = 0;
-      abilityName = "";
-    } else {
+      if (isActualUpgrade) {
+        const opt = upgradeSel.selectedOptions[0];
+        oldPrice = parseInt(opt.dataset.price) || 0;
+        baseItemId = opt.value;
+
+        if (!hasSearchedWondrous) {
+           return ui.notifications.error("强化奇物时，请务必在上方搜索并选择一个新的目标奇物！");
+        }
+        specificItem = this.craftingState.specificItem;
+        itemCL = specificItem.cl;
+        marketPrice = specificItem.price - oldPrice;
+        if (marketPrice <= 0) {
+           return ui.notifications.error("新奇物的价格必须大于原物品的价格！");
+        }
+        itemName = specificItem.name;
+        enh = 0;
+        abilityName = "";
+      } else {
+        if (!hasSearchedWondrous) return ui.notifications.error("请先在上方搜索并选择一个奇物！");
+        specificItem = this.craftingState.specificItem;
+        itemCL = specificItem.cl;
+        marketPrice = specificItem.price;
+        itemName = specificItem.name;
+        baseItemId = specificItem.id;
+        enh = 0;
+        abilityName = "";
+      }
+    }
+
+    if (!specificItem) {
       itemCL = parseInt(root.querySelector("#item-cl").textContent);
       let newTotalPrice = parseInt(root.querySelector("#market-price").textContent.replace(/,/g, ""));
       enh = parseInt(root.querySelector("#enhancement").value) || 0;
@@ -945,10 +980,8 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
       abilityPrice = parseInt(selectedOpt?.dataset.price) || 0;
       abilityDesc = selectedOpt?.dataset.desc || "";
 
-      if (isUpgrading) {
-         const upgradeSel = root.querySelector("#upgrade-item");
+      if (isUpgrading && hasUpgradeItem) {
          const opt = upgradeSel.selectedOptions[0];
-         if (!opt || !opt.value) return ui.notifications.error("请先选择要强化的物品！");
          oldPrice = parseInt(opt.dataset.price) || 0;
          baseItemId = opt.value;
          
@@ -977,7 +1010,6 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
          abilityBonus = finalAbilityBonus;
          abilityPrice = finalAbilityPrice;
          
-         // 合并描述
          let oldDescPart = "";
          const oldDescMatch = oldDesc.match(/<div style="font-size:0.95em; color:#333; padding:6px; background:#eee; border-left:3px solid #666; margin-top:4px; white-space:pre-wrap;">([\s\S]*?)<\/div>/);
          if (oldDescMatch && oldDescMatch[1]) oldDescPart = oldDescMatch[1];
@@ -988,15 +1020,13 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
              abilityDesc = oldDescPart;
          }
 
-         // 清理名字：删除所有 +数字，删除旧附魔，删除新附魔(防止自带)
-         let baseName = opt.dataset.name.replace(/^\S+?\s-\s/, ""); // 去掉 "角色名 - "
-         baseName = baseName.replace(/\+\d+\s*/g, ""); // 删除 "+1 " 或 "+2"
+         let baseName = opt.dataset.name.replace(/^\S+?\s-\s/, ""); 
+         baseName = baseName.replace(/\+\d+\s*/g, ""); 
          if (oldAbilityName) baseName = baseName.replace(oldAbilityName, "").trim();
          if (abilityName && abilityName !== oldAbilityName) {
              abilityName.split(" ").forEach(n => { if(n) baseName = baseName.replace(n, "").trim(); });
          }
          
-         // 重新拼接
          itemName = (enh > 0 ? `+${enh} ` : "") + (abilityName ? `${abilityName} ` : "") + baseName;
          
          marketPrice = newTotalPrice - oldPrice;
@@ -1087,7 +1117,7 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
       baseItemId: baseItemId, enhancement: enh, abilityName: abilityName, isWeapon: isWeaponType,
       abilityBonus: abilityBonus, abilityPrice: abilityPrice, abilityDesc: abilityDesc,
       itemType: itemType, specificItem: specificItem, isAdventuring: isAdventuring,
-      isUpgrading: isUpgrading, oldPrice: oldPrice, oldItemId: isUpgrading ? baseItemId : ""
+      isUpgrading: isUpgrading && isActualUpgrade, oldPrice: oldPrice, oldItemId: isActualUpgrade ? baseItemId : ""
     };
 
     this._saveState();
@@ -1243,7 +1273,7 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
     let outcome = "", outcomeColor = "green", isSuccess = false;
     let finalMultiplier = this.craftingState.multiplier;
-    let originalPrice = this.craftingState.basePrice; // 如果是强化，这里是差价
+    let originalPrice = this.craftingState.basePrice; 
     const successes = results.filter(r => r.success).length;
 
     if (results.length === 2) {
@@ -1255,7 +1285,7 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
       else { outcome = "失败：物品已毁坏。"; outcomeColor = "red"; }
     }
 
-    let newTotalPrice = this.craftingState.isUpgrading 
+    let newTotalPrice = this.craftingState.isUpgrading && this.craftingState.oldPrice > 0
        ? originalPrice + this.craftingState.oldPrice 
        : originalPrice;
        
@@ -1277,29 +1307,95 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
         if (this.craftingState.flaws.length > 0) newName += ` [${localizeTraitName("Flaw", this.craftingState.flaws[0])}]`;
         
         let itemData = null;
+        let isUpgradeSuccess = false;
+
         try {
-          if (this.craftingState.itemType === "wondrous") {
-            const spec = this.craftingState.specificItem;
-            if (spec && spec.packId && spec.id) {
-              const pack = game.packs.get(spec.packId);
-              if (pack) {
-                const doc = await pack.getDocument(spec.id);
-                if (doc) itemData = doc.toObject();
-              }
+          if (this.craftingState.isUpgrading && this.craftingState.oldItemId) {
+            let oldItem = null;
+            for (let actor of game.actors) {
+               oldItem = actor.items.get(this.craftingState.oldItemId);
+               if (oldItem) break;
             }
-            if (!itemData) throw new Error("找不到奇物数据");
-          } else {
-            if (this.craftingState.isUpgrading && this.craftingState.oldItemId) {
-              for (let actor of game.actors) {
-                 const oldItem = actor.items.get(this.craftingState.oldItemId);
-                 if (oldItem) {
-                    itemData = oldItem.toObject();
-                    await oldItem.delete(); 
-                    break;
-                 }
+            
+            if (oldItem) {
+              let updateData = {
+                "name": newName,
+                "system.price": newTotalPrice,
+                "system.cl": this.craftingState.itemCL,
+                "system.masterwork": true,
+              };
+              
+              if (this.craftingState.itemType !== "wondrous") {
+                const isWeaponType = ["simple", "martial", "exotic"].includes(this.craftingState.itemType);
+                if (isWeaponType) {
+                  updateData["system.enh"] = this.craftingState.enhancement;
+                } else {
+                  updateData["system.armor.enh"] = this.craftingState.enhancement;
+                  updateData["system.enh"] = this.craftingState.enhancement;
+                }
+              } else if (this.craftingState.specificItem) {
+                const spec = this.craftingState.specificItem;
+                const pack = game.packs.get(spec.packId);
+                if (pack) {
+                  const doc = await pack.getDocument(spec.id);
+                  if (doc) {
+                    const docData = doc.toObject();
+                    updateData["img"] = docData.img;
+                  }
+                }
               }
+
+              let descHtml = `<p><strong>造物信息：</strong></p><ul>`;
+              if (this.craftingState.enhancement > 0) {
+                descHtml += `<li><b>增强加值：</b>+${this.craftingState.enhancement}</li>`;
+              }
+              if (this.craftingState.abilityName) {
+                let abDetail = `<b>特殊附魔：</b>${this.craftingState.abilityName}`;
+                if (this.craftingState.abilityBonus > 0) abDetail += ` (等效 +${this.craftingState.abilityBonus})`;
+                if (this.craftingState.abilityPrice > 0) abDetail += ` (+${this.craftingState.abilityPrice} gp)`;
+                if (this.craftingState.abilityDesc) {
+                  abDetail += `<br><div style="font-size:0.95em; color:#333; padding:6px; background:#eee; border-left:3px solid #666; margin-top:4px; white-space:pre-wrap;">${this.craftingState.abilityDesc}</div>`;
+                }
+                descHtml += `<li>${abDetail}</li>`;
+              }
+              descHtml += `</ul>`;
+
+              descHtml += `<p><strong>造物特质：</strong></p><ul>`;
+              if (this.craftingState.perks.length === 0 && this.craftingState.quirks.length === 0 && this.craftingState.flaws.length === 0) descHtml += `<li>无</li>`;
+              this.craftingState.perks.forEach(p => descHtml += `<li style="color:green"><b>优点：${localizeTraitName("Perk", p)}</b> - ${localizeTraitDesc("Perk", p)}</li>`);
+              this.craftingState.quirks.forEach(q => descHtml += `<li style="color:#b8860b"><b>异常：${localizeTraitName("Quirk", q)}</b> - ${localizeTraitDesc("Quirk", q)}</li>`);
+              this.craftingState.flaws.forEach(f => descHtml += `<li style="color:red"><b>瑕疵：${localizeTraitName("Flaw", f)}</b> - ${localizeTraitDesc("Flaw", f)}</li>`);
+              descHtml += `</ul>`;
+              
+              updateData["system.description.value"] = descHtml + (oldItem.system.description?.value || "");
+
+              updateData["flags.pf1-dynamic-crafting"] = {
+                  perks: this.craftingState.perks, 
+                  quirks: this.craftingState.quirks, 
+                  flaws: this.craftingState.flaws,
+                  abilityName: this.craftingState.abilityName,
+                  abilityBonus: this.craftingState.abilityBonus,
+                  abilityPrice: this.craftingState.abilityPrice
+              };
+
+              await oldItem.update(updateData);
+              isUpgradeSuccess = true;
+              content += `<p style="color:blue; font-weight:bold;">✅ 物品已强化：${newName}</p>`;
             }
-            if (!itemData) {
+          }
+
+          if (!isUpgradeSuccess) {
+            if (this.craftingState.itemType === "wondrous" && this.craftingState.specificItem) {
+              const spec = this.craftingState.specificItem;
+              if (spec && spec.packId && spec.id) {
+                const pack = game.packs.get(spec.packId);
+                if (pack) {
+                  const doc = await pack.getDocument(spec.id);
+                  if (doc) itemData = doc.toObject();
+                }
+              }
+              if (!itemData) throw new Error("找不到奇物数据");
+            } else {
               const isWeaponType = ["simple", "martial", "exotic"].includes(this.craftingState.itemType);
               const packId = isWeaponType ? "pf1.weapons-and-ammo" : "pf1.armors-and-shields";
               const pack = game.packs.get(packId);
@@ -1309,86 +1405,88 @@ export class CraftingApp extends HandlebarsApplicationMixin(ApplicationV2) {
               }
             }
           }
-        } catch (e) { console.warn("获取基础物品数据失败", e); }
+        } catch (e) { console.warn("获取物品数据失败", e); }
 
-        if (!itemData) {
-            itemData = {
-                name: newName, type: this.craftingState.itemType === "weapon" ? "weapon" : "equipment",
-                img: "icons/weapons/swords/sword-broad-crystal-paired.webp",
-                system: { 
-                    description: { value: "" }, price: newTotalPrice, quantity: 1, equipped: true, carried: true, 
-                    identified: true, cl: this.craftingState.itemCL, aura: { custom: false, school: "uni" }, 
-                    subType: "simple", actions: [] 
-                }
-            };
-        }
-
-        itemData.name = newName;
-        itemData.system.price = newTotalPrice; // 市场价
-        itemData.system.cl = this.craftingState.itemCL;
-        
-        if (this.craftingState.itemType !== "wondrous") {
-          const isWeaponType = ["simple", "martial", "exotic"].includes(this.craftingState.itemType);
-          if (isWeaponType) {
-            itemData.system.enh = this.craftingState.enhancement;
-          } else {
-            if (!itemData.system.armor) itemData.system.armor = {};
-            itemData.system.armor.enh = this.craftingState.enhancement;
-            itemData.system.enh = this.craftingState.enhancement;
+        if (!isUpgradeSuccess) {
+          if (!itemData) {
+              itemData = {
+                  name: newName, type: this.craftingState.itemType === "weapon" ? "weapon" : "equipment",
+                  img: "icons/weapons/swords/sword-broad-crystal-paired.webp",
+                  system: { 
+                      description: { value: "" }, price: newTotalPrice, quantity: 1, equipped: true, carried: true, 
+                      identified: true, cl: this.craftingState.itemCL, aura: { custom: false, school: "uni" }, 
+                      subType: "simple", actions: [] 
+                  }
+              };
           }
-          itemData.system.masterwork = true;
-        }
 
-        let auraSchool = "uni"; 
-        if (this.craftingState.abilityDesc) {
-          const match = this.craftingState.abilityDesc.match(/灵光：.*?((?:防护|咒法|预言|附魔|塑能|幻术|死灵|变化|通用)系)/);
-          if (match && match[1]) {
-            const schoolMap = {
-              "防护系": "abj", "咒法系": "con", "预言系": "div", "附魔系": "enc",
-              "塑能系": "evo", "幻术系": "ill", "死灵系": "nec", "变化系": "trs", "通用系": "uni"
-            };
-            if (schoolMap[match[1]]) auraSchool = schoolMap[match[1]];
+          itemData.name = newName;
+          itemData.system.price = newTotalPrice; 
+          itemData.system.cl = this.craftingState.itemCL;
+          
+          if (this.craftingState.itemType !== "wondrous") {
+            const isWeaponType = ["simple", "martial", "exotic"].includes(this.craftingState.itemType);
+            if (isWeaponType) {
+              itemData.system.enh = this.craftingState.enhancement;
+            } else {
+              if (!itemData.system.armor) itemData.system.armor = {};
+              itemData.system.armor.enh = this.craftingState.enhancement;
+              itemData.system.enh = this.craftingState.enhancement;
+            }
+            itemData.system.masterwork = true;
           }
-        }
-        if (!itemData.system.aura) itemData.system.aura = {};
-        itemData.system.aura.school = auraSchool;
-        
-        itemData.flags = itemData.flags || {};
-        itemData.flags["pf1-dynamic-crafting"] = {
-            perks: this.craftingState.perks, 
-            quirks: this.craftingState.quirks, 
-            flaws: this.craftingState.flaws,
-            abilityName: this.craftingState.abilityName,
-            abilityBonus: this.craftingState.abilityBonus,
-            abilityPrice: this.craftingState.abilityPrice
-        };
 
-        let descHtml = `<p><strong>造物信息：</strong></p><ul>`;
-        if (this.craftingState.enhancement > 0) {
-          descHtml += `<li><b>增强加值：</b>+${this.craftingState.enhancement}</li>`;
-        }
-        if (this.craftingState.abilityName) {
-          let abDetail = `<b>特殊附魔：</b>${this.craftingState.abilityName}`;
-          if (this.craftingState.abilityBonus > 0) abDetail += ` (等效 +${this.craftingState.abilityBonus})`;
-          if (this.craftingState.abilityPrice > 0) abDetail += ` (+${this.craftingState.abilityPrice} gp)`;
+          let auraSchool = "uni"; 
           if (this.craftingState.abilityDesc) {
-            abDetail += `<br><div style="font-size:0.95em; color:#333; padding:6px; background:#eee; border-left:3px solid #666; margin-top:4px; white-space:pre-wrap;">${this.craftingState.abilityDesc}</div>`;
+            const match = this.craftingState.abilityDesc.match(/灵光：.*?((?:防护|咒法|预言|附魔|塑能|幻术|死灵|变化|通用)系)/);
+            if (match && match[1]) {
+              const schoolMap = {
+                "防护系": "abj", "咒法系": "con", "预言系": "div", "附魔系": "enc",
+                "塑能系": "evo", "幻术系": "ill", "死灵系": "nec", "变化系": "trs", "通用系": "uni"
+              };
+              if (schoolMap[match[1]]) auraSchool = schoolMap[match[1]];
+            }
           }
-          descHtml += `<li>${abDetail}</li>`;
+          if (!itemData.system.aura) itemData.system.aura = {};
+          itemData.system.aura.school = auraSchool;
+          
+          itemData.flags = itemData.flags || {};
+          itemData.flags["pf1-dynamic-crafting"] = {
+              perks: this.craftingState.perks, 
+              quirks: this.craftingState.quirks, 
+              flaws: this.craftingState.flaws,
+              abilityName: this.craftingState.abilityName,
+              abilityBonus: this.craftingState.abilityBonus,
+              abilityPrice: this.craftingState.abilityPrice
+          };
+
+          let descHtml = `<p><strong>造物信息：</strong></p><ul>`;
+          if (this.craftingState.enhancement > 0) {
+            descHtml += `<li><b>增强加值：</b>+${this.craftingState.enhancement}</li>`;
+          }
+          if (this.craftingState.abilityName) {
+            let abDetail = `<b>特殊附魔：</b>${this.craftingState.abilityName}`;
+            if (this.craftingState.abilityBonus > 0) abDetail += ` (等效 +${this.craftingState.abilityBonus})`;
+            if (this.craftingState.abilityPrice > 0) abDetail += ` (+${this.craftingState.abilityPrice} gp)`;
+            if (this.craftingState.abilityDesc) {
+              abDetail += `<br><div style="font-size:0.95em; color:#333; padding:6px; background:#eee; border-left:3px solid #666; margin-top:4px; white-space:pre-wrap;">${this.craftingState.abilityDesc}</div>`;
+            }
+            descHtml += `<li>${abDetail}</li>`;
+          }
+          descHtml += `</ul>`;
+
+          descHtml += `<p><strong>造物特质：</strong></p><ul>`;
+          if (this.craftingState.perks.length === 0 && this.craftingState.quirks.length === 0 && this.craftingState.flaws.length === 0) descHtml += `<li>无</li>`;
+          this.craftingState.perks.forEach(p => descHtml += `<li style="color:green"><b>优点：${localizeTraitName("Perk", p)}</b> - ${localizeTraitDesc("Perk", p)}</li>`);
+          this.craftingState.quirks.forEach(q => descHtml += `<li style="color:#b8860b"><b>异常：${localizeTraitName("Quirk", q)}</b> - ${localizeTraitDesc("Quirk", q)}</li>`);
+          this.craftingState.flaws.forEach(f => descHtml += `<li style="color:red"><b>瑕疵：${localizeTraitName("Flaw", f)}</b> - ${localizeTraitDesc("Flaw", f)}</li>`);
+          descHtml += `</ul>`;
+          
+          itemData.system.description.value = descHtml + (itemData.system.description?.value || "");
+
+          await Item.create(itemData);
+          content += `<p style="color:blue; font-weight:bold;">✅ 物品已创建：${newName}</p>`;
         }
-        descHtml += `</ul>`;
-
-        descHtml += `<p><strong>造物特质：</strong></p><ul>`;
-        if (this.craftingState.perks.length === 0 && this.craftingState.quirks.length === 0 && this.craftingState.flaws.length === 0) descHtml += `<li>无</li>`;
-        this.craftingState.perks.forEach(p => descHtml += `<li style="color:green"><b>优点：${localizeTraitName("Perk", p)}</b> - ${localizeTraitDesc("Perk", p)}</li>`);
-        this.craftingState.quirks.forEach(q => descHtml += `<li style="color:#b8860b"><b>异常：${localizeTraitName("Quirk", q)}</b> - ${localizeTraitDesc("Quirk", q)}</li>`);
-        this.craftingState.flaws.forEach(f => descHtml += `<li style="color:red"><b>瑕疵：${localizeTraitName("Flaw", f)}</b> - ${localizeTraitDesc("Flaw", f)}</li>`);
-        descHtml += `</ul>`;
-        
-        itemData.system.description.value = descHtml + (itemData.system.description?.value || "");
-
-        await Item.create(itemData);
-        content += `<p style="color:blue; font-weight:bold;">✅ 物品已创建：${newName}</p>`;
     }
 
     content += `</div>`;
