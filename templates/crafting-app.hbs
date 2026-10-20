@@ -43,14 +43,15 @@
         <div class="form-group" id="ability-group">
           <label>特殊能力：</label>
           <select id="special-ability">
-            <option value="0" data-name="" data-cl="0" data-bonus="0">无</option>
+            <option value="0" data-name="" data-cl="0" data-bonus="0" data-price="0" data-desc="">无</option>
           </select>
         </div>
       </div>
 
+      <!-- 奇物搜索：强化和新造都可以用 -->
       <div id="wondrous-fields" style="display: none;">
         <div class="form-group">
-          <label>搜索奇物 (英文名)：</label>
+          <label>搜索新奇物 (可选)：</label>
           <div style="display: flex; gap: 5px;">
             <input type="text" id="specific-search-input" placeholder="例如：Belt of Giant Strength" style="flex: 1;">
             <button type="button" data-action="search-specific" class="craft-button" style="width: auto; padding: 0 10px; margin: 0;">搜索</button>
@@ -70,7 +71,7 @@
       <p><strong>等效总加值：</strong> <span id="total-bonus-preview">+0</span></p>
       <p id="old-price-container" style="display: none;"><strong>原物品价格：</strong> <span id="old-price-preview">0</span> gp</p>
       <p><strong>新物品总价：</strong> <span id="market-price">0</span> gp</p>
-      <!-- 👇 新增的差价显示行 👇 -->
+      <!-- 差价显示 -->
       <p id="diff-price-container" style="display: none;"><strong>新旧物品差价：</strong> <span id="diff-price-preview" style="font-weight: bold;">0</span> gp</p>
     </div>
 
@@ -185,7 +186,7 @@
           </button>
         </div>
       {{else if craftingState.isChallengeDay}}
-        <!-- 挑战日 UI 保持原样 -->
+        <!-- 挑战日 UI -->
         <div style="border: 2px dashed #d35400; padding: 10px; margin-top: 10px; background: #fdebd0;">
           <h4 style="color: #d35400; margin: 0 0 5px 0;">⚠️ 挑战日！</h4>
           {{#if craftingState.currentChallenge}}
@@ -234,15 +235,6 @@
                     <option value="{{craftingState.currentChallenge.task1.key}}" data-display="{{craftingState.currentChallenge.task1.name}}" data-dc="{{craftingState.currentChallenge.task1.dc}}" data-type="{{craftingState.currentChallenge.task1.type}}">任务 1：{{craftingState.currentChallenge.task1.name}}</option>
                   {{/if}}
                 {{/if}}
-                {{#if craftingState.currentChallenge.task2}}
-                  {{#if craftingState.currentChallenge.task2.options}}
-                    {{#each craftingState.currentChallenge.task2.options}}
-                      <option value="{{this.key}}" data-display="{{this.name}}" data-dc="{{../craftingState.currentChallenge.task2.dc}}" data-type="{{../craftingState.currentChallenge.task2.type}}">任务 1：{{this.name}}</option>
-                    {{/each}}
-                  {{else}}
-                    <option value="{{craftingState.currentChallenge.task2.key}}" data-display="{{craftingState.currentChallenge.task2.name}}" data-dc="{{craftingState.currentChallenge.task2.dc}}" data-type="{{craftingState.currentChallenge.task2.type}}">任务 1：{{craftingState.currentChallenge.task2.name}}</option>
-                  {{/if}}
-                {{/if}}
                 <option value="none" data-display="" data-dc="0" data-type="skill">放弃任务 1</option>
               </select>
               <select id="challenge-actor-1" class="task-actor">{{#each actors}}<option value="{{this.id}}" data-skills='{{this.skillsJSON}}'>{{this.name}}</option>{{/each}}</select>
@@ -259,15 +251,6 @@
                     {{/each}}
                   {{else}}
                     <option value="{{craftingState.currentChallenge.task2.key}}" data-display="{{craftingState.currentChallenge.task2.name}}" data-dc="{{craftingState.currentChallenge.task2.dc}}" data-type="{{craftingState.currentChallenge.task2.type}}">任务 2：{{craftingState.currentChallenge.task2.name}}</option>
-                  {{/if}}
-                {{/if}}
-                {{#if craftingState.currentChallenge.task1}}
-                  {{#if craftingState.currentChallenge.task1.options}}
-                    {{#each craftingState.currentChallenge.task1.options}}
-                      <option value="{{this.key}}" data-display="{{this.name}}" data-dc="{{../craftingState.currentChallenge.task1.dc}}" data-type="{{../craftingState.currentChallenge.task1.type}}">任务 2：{{this.name}}</option>
-                    {{/each}}
-                  {{else}}
-                    <option value="{{craftingState.currentChallenge.task1.key}}" data-display="{{craftingState.currentChallenge.task1.name}}" data-dc="{{craftingState.currentChallenge.task1.dc}}" data-type="{{craftingState.currentChallenge.task1.type}}">任务 2：{{craftingState.currentChallenge.task1.name}}</option>
                   {{/if}}
                 {{/if}}
                 <option value="none" data-display="" data-dc="0" data-type="skill" selected>放弃任务 2</option>
@@ -294,4 +277,4 @@
       {{/if}}
     </div>
   {{/unless}}
-</div>s
+</div>
